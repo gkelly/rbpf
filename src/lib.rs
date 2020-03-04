@@ -8,34 +8,43 @@
 // the MIT license <http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-
 //! Virtual machine and JIT compiler for eBPF programs.
-#![doc(html_logo_url = "https://raw.githubusercontent.com/qmonnet/rbpf/master/misc/rbpf.png",
-       html_favicon_url = "https://raw.githubusercontent.com/qmonnet/rbpf/master/misc/rbpf.ico")]
-
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/qmonnet/rbpf/master/misc/rbpf.png",
+    html_favicon_url = "https://raw.githubusercontent.com/qmonnet/rbpf/master/misc/rbpf.ico"
+)]
 #![warn(missing_docs)]
 // There are unused mut warnings due to unsafe code.
 #![allow(unused_mut)]
 // Allows old-style clippy
 #![allow(renamed_and_removed_lints)]
-
-#![cfg_attr(feature = "cargo-clippy", allow(redundant_field_names, single_match, cast_lossless, doc_markdown, match_same_arms, unreadable_literal))]
+#![cfg_attr(
+    feature = "cargo-clippy",
+    allow(
+        redundant_field_names,
+        single_match,
+        cast_lossless,
+        doc_markdown,
+        match_same_arms,
+        unreadable_literal
+    )
+)]
 
 extern crate byteorder;
 extern crate combine;
 extern crate time;
 
-use std::u32;
+use byteorder::{ByteOrder, LittleEndian};
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
-use byteorder::{ByteOrder, LittleEndian};
+use std::u32;
 
+mod asm_parser;
 pub mod assembler;
 pub mod disassembler;
 pub mod ebpf;
 pub mod helpers;
 pub mod insn_builder;
-mod asm_parser;
 #[cfg(not(windows))]
 mod jit;
 mod verifier;
@@ -51,7 +60,7 @@ mod verifier;
 pub type Verifier = fn(prog: &[u8]) -> Result<(), Error>;
 
 /// eBPF helper function.
-pub type Helper = fn (u64, u64, u64, u64, u64) -> u64;
+pub type Helper = fn(u64, u64, u64, u64, u64) -> u64;
 
 /// eBPF Jit-compiled program.
 pub type JitProgram = unsafe fn(*mut u8, usize, *mut u8, usize, usize, usize) -> u64;
@@ -61,9 +70,9 @@ pub type JitProgram = unsafe fn(*mut u8, usize, *mut u8, usize, usize, usize) ->
 // actually handle it. The offsets are used to tell the VM where in the buffer the pointers to
 // packet data start and end should be stored each time the program is run on a new packet.
 struct MetaBuff {
-    data_offset:     usize,
+    data_offset: usize,
     data_end_offset: usize,
-    buffer:          Vec<u8>,
+    buffer: Vec<u8>,
 }
 
 /// A virtual machine to run eBPF program. This kind of VM is used for programs expecting to work
@@ -99,14 +108,13 @@ struct MetaBuff {
 /// assert_eq!(res, 0x2211);
 /// ```
 pub struct EbpfVmMbuff<'a> {
-    prog:     Option<&'a [u8]>,
+    prog: Option<&'a [u8]>,
     verifier: Verifier,
-    jit:      Option<JitProgram>,
-    helpers:  HashMap<u32, ebpf::Helper>,
+    jit: Option<JitProgram>,
+    helpers: HashMap<u32, ebpf::Helper>,
 }
 
 impl<'a> EbpfVmMbuff<'a> {
-
     /// Create a new virtual machine instance, and load an eBPF program into that instance.
     /// When attempting to load the program, it passes through a simple verifier.
     ///
@@ -128,10 +136,10 @@ impl<'a> EbpfVmMbuff<'a> {
         }
 
         Ok(EbpfVmMbuff {
-            prog:     prog,
+            prog: prog,
             verifier: verifier::check,
-            jit:      None,
-            helpers:  HashMap::new(),
+            jit: None,
+            helpers: HashMap::new(),
         })
     }
 
@@ -279,33 +287,44 @@ impl<'a> EbpfVmMbuff<'a> {
     pub fn execute_program(&self, mem: &[u8], mbuff: &[u8]) -> Result<u64, Error> {
         const U32MAX: u64 = u32::MAX as u64;
 
-        let prog = match self.prog { 
+        let prog = match self.prog {
             Some(prog) => prog,
-            None => Err(Error::new(ErrorKind::Other,
-                        "Error: No program set, call prog_set() to load one"))?,
+            None => Err(Error::new(
+                ErrorKind::Other,
+                "Error: No program set, call prog_set() to load one",
+            ))?,
         };
-        let stack = vec![0u8;ebpf::STACK_SIZE];
+        let stack = vec![0u8; ebpf::STACK_SIZE];
 
         // R1 points to beginning of memory area, R10 to stack
-        let mut reg: [u64;11] = [
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, stack.as_ptr() as u64 + stack.len() as u64
+        let mut reg: [u64; 11] = [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            stack.as_ptr() as u64 + stack.len() as u64,
         ];
         if !mbuff.is_empty() {
             reg[1] = mbuff.as_ptr() as u64;
-        }
-        else if !mem.is_empty() {
+        } else if !mem.is_empty() {
             reg[1] = mem.as_ptr() as u64;
         }
 
-        let check_mem_load = | addr: u64, len: usize, insn_ptr: usize | {
+        let check_mem_load = |addr: u64, len: usize, insn_ptr: usize| {
             EbpfVmMbuff::check_mem(addr, len, "load", insn_ptr, mbuff, mem, &stack)
         };
-        let check_mem_store = | addr: u64, len: usize, insn_ptr: usize | {
+        let check_mem_store = |addr: u64, len: usize, insn_ptr: usize| {
             EbpfVmMbuff::check_mem(addr, len, "store", insn_ptr, mbuff, mem, &stack)
         };
 
         // Loop on instructions
-        let mut insn_ptr:usize = 0;
+        let mut insn_ptr: usize = 0;
         while insn_ptr * ebpf::INSN_SIZE < prog.len() {
             let insn = ebpf::get_insn(prog, insn_ptr);
             insn_ptr += 1;
@@ -313,103 +332,130 @@ impl<'a> EbpfVmMbuff<'a> {
             let _src = insn.src as usize;
 
             match insn.opc {
-
                 // BPF_LD class
                 // LD_ABS_* and LD_IND_* are supposed to load pointer to data from metadata buffer.
                 // Since this pointer is constant, and since we already know it (mem), do not
                 // bother re-fetching it, just use mem already.
-                ebpf::LD_ABS_B   => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u8;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_ABS_H   => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u16;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_ABS_W   => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u32;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_ABS_DW  => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u64;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_IND_B   => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64) as *const u8;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_IND_H   => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64) as *const u16;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_IND_W   => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64) as *const u32;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_IND_DW  => reg[0] = unsafe {
-                    let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64) as *const u64;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
+                ebpf::LD_ABS_B => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u8;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_ABS_H => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u16;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_ABS_W => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u32;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_ABS_DW => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + (insn.imm as u32) as u64) as *const u64;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_IND_B => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64)
+                            as *const u8;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_IND_H => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64)
+                            as *const u16;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_IND_W => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64)
+                            as *const u32;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_IND_DW => {
+                    reg[0] = unsafe {
+                        let x = (mem.as_ptr() as u64 + reg[_src] + (insn.imm as u32) as u64)
+                            as *const u64;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
 
-                ebpf::LD_DW_IMM  => {
+                ebpf::LD_DW_IMM => {
                     let next_insn = ebpf::get_insn(prog, insn_ptr);
                     insn_ptr += 1;
                     reg[_dst] = ((insn.imm as u32) as u64) + ((next_insn.imm as u64) << 32);
-                },
+                }
 
                 // BPF_LDX class
-                ebpf::LD_B_REG   => reg[_dst] = unsafe {
-                    #[allow(cast_ptr_alignment)]
-                    let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u8;
-                    check_mem_load(x as u64, 1, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_H_REG   => reg[_dst] = unsafe {
-                    #[allow(cast_ptr_alignment)]
-                    let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u16;
-                    check_mem_load(x as u64, 2, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_W_REG   => reg[_dst] = unsafe {
-                    #[allow(cast_ptr_alignment)]
-                    let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u32;
-                    check_mem_load(x as u64, 4, insn_ptr)?;
-                    *x as u64
-                },
-                ebpf::LD_DW_REG  => reg[_dst] = unsafe {
-                    #[allow(cast_ptr_alignment)]
-                    let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u64;
-                    check_mem_load(x as u64, 8, insn_ptr)?;
-                    *x as u64
-                },
+                ebpf::LD_B_REG => {
+                    reg[_dst] = unsafe {
+                        #[allow(cast_ptr_alignment)]
+                        let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u8;
+                        check_mem_load(x as u64, 1, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_H_REG => {
+                    reg[_dst] = unsafe {
+                        #[allow(cast_ptr_alignment)]
+                        let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u16;
+                        check_mem_load(x as u64, 2, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_W_REG => {
+                    reg[_dst] = unsafe {
+                        #[allow(cast_ptr_alignment)]
+                        let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u32;
+                        check_mem_load(x as u64, 4, insn_ptr)?;
+                        *x as u64
+                    }
+                }
+                ebpf::LD_DW_REG => {
+                    reg[_dst] = unsafe {
+                        #[allow(cast_ptr_alignment)]
+                        let x = (reg[_src] as *const u8).offset(insn.off as isize) as *const u64;
+                        check_mem_load(x as u64, 8, insn_ptr)?;
+                        *x as u64
+                    }
+                }
 
                 // BPF_ST class
-                ebpf::ST_B_IMM   => unsafe {
+                ebpf::ST_B_IMM => unsafe {
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u8;
                     check_mem_store(x as u64, 1, insn_ptr)?;
                     *x = insn.imm as u8;
                 },
-                ebpf::ST_H_IMM   => unsafe {
+                ebpf::ST_H_IMM => unsafe {
                     #[allow(cast_ptr_alignment)]
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u16;
                     check_mem_store(x as u64, 2, insn_ptr)?;
                     *x = insn.imm as u16;
                 },
-                ebpf::ST_W_IMM   => unsafe {
+                ebpf::ST_W_IMM => unsafe {
                     #[allow(cast_ptr_alignment)]
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u32;
                     check_mem_store(x as u64, 4, insn_ptr)?;
                     *x = insn.imm as u32;
                 },
-                ebpf::ST_DW_IMM  => unsafe {
+                ebpf::ST_DW_IMM => unsafe {
                     #[allow(cast_ptr_alignment)]
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u64;
                     check_mem_store(x as u64, 8, insn_ptr)?;
@@ -417,177 +463,309 @@ impl<'a> EbpfVmMbuff<'a> {
                 },
 
                 // BPF_STX class
-                ebpf::ST_B_REG   => unsafe {
+                ebpf::ST_B_REG => unsafe {
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u8;
                     check_mem_store(x as u64, 1, insn_ptr)?;
                     *x = reg[_src] as u8;
                 },
-                ebpf::ST_H_REG   => unsafe {
+                ebpf::ST_H_REG => unsafe {
                     #[allow(cast_ptr_alignment)]
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u16;
                     check_mem_store(x as u64, 2, insn_ptr)?;
                     *x = reg[_src] as u16;
                 },
-                ebpf::ST_W_REG   => unsafe {
+                ebpf::ST_W_REG => unsafe {
                     #[allow(cast_ptr_alignment)]
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u32;
                     check_mem_store(x as u64, 4, insn_ptr)?;
                     *x = reg[_src] as u32;
                 },
-                ebpf::ST_DW_REG  => unsafe {
+                ebpf::ST_DW_REG => unsafe {
                     #[allow(cast_ptr_alignment)]
                     let x = (reg[_dst] as *const u8).offset(insn.off as isize) as *mut u64;
                     check_mem_store(x as u64, 8, insn_ptr)?;
                     *x = reg[_src] as u64;
                 },
-                ebpf::ST_W_XADD  => unimplemented!(),
+                ebpf::ST_W_XADD => unimplemented!(),
                 ebpf::ST_DW_XADD => unimplemented!(),
 
                 // BPF_ALU class
                 // TODO Check how overflow works in kernel. Should we &= U32MAX all src register value
                 // before we do the operation?
                 // Cf ((0x11 << 32) - (0x1 << 32)) as u32 VS ((0x11 << 32) as u32 - (0x1 << 32) as u32
-                ebpf::ADD32_IMM  => reg[_dst] = (reg[_dst] as i32).wrapping_add(insn.imm)         as u64, //((reg[_dst] & U32MAX) + insn.imm  as u64)     & U32MAX,
-                ebpf::ADD32_REG  => reg[_dst] = (reg[_dst] as i32).wrapping_add(reg[_src] as i32) as u64, //((reg[_dst] & U32MAX) + (reg[_src] & U32MAX)) & U32MAX,
-                ebpf::SUB32_IMM  => reg[_dst] = (reg[_dst] as i32).wrapping_sub(insn.imm)         as u64,
-                ebpf::SUB32_REG  => reg[_dst] = (reg[_dst] as i32).wrapping_sub(reg[_src] as i32) as u64,
-                ebpf::MUL32_IMM  => reg[_dst] = (reg[_dst] as i32).wrapping_mul(insn.imm)         as u64,
-                ebpf::MUL32_REG  => reg[_dst] = (reg[_dst] as i32).wrapping_mul(reg[_src] as i32) as u64,
-                ebpf::DIV32_IMM  => reg[_dst] = (reg[_dst] as u32 / insn.imm              as u32) as u64,
-                ebpf::DIV32_REG  => {
+                ebpf::ADD32_IMM => reg[_dst] = (reg[_dst] as i32).wrapping_add(insn.imm) as u64, //((reg[_dst] & U32MAX) + insn.imm  as u64)     & U32MAX,
+                ebpf::ADD32_REG => {
+                    reg[_dst] = (reg[_dst] as i32).wrapping_add(reg[_src] as i32) as u64
+                } //((reg[_dst] & U32MAX) + (reg[_src] & U32MAX)) & U32MAX,
+                ebpf::SUB32_IMM => reg[_dst] = (reg[_dst] as i32).wrapping_sub(insn.imm) as u64,
+                ebpf::SUB32_REG => {
+                    reg[_dst] = (reg[_dst] as i32).wrapping_sub(reg[_src] as i32) as u64
+                }
+                ebpf::MUL32_IMM => reg[_dst] = (reg[_dst] as i32).wrapping_mul(insn.imm) as u64,
+                ebpf::MUL32_REG => {
+                    reg[_dst] = (reg[_dst] as i32).wrapping_mul(reg[_src] as i32) as u64
+                }
+                ebpf::DIV32_IMM => reg[_dst] = (reg[_dst] as u32 / insn.imm as u32) as u64,
+                ebpf::DIV32_REG => {
                     if reg[_src] == 0 {
-                        Err(Error::new(ErrorKind::Other,"Error: division by 0"))?;
+                        Err(Error::new(ErrorKind::Other, "Error: division by 0"))?;
                     }
                     reg[_dst] = (reg[_dst] as u32 / reg[_src] as u32) as u64;
-                },
-                ebpf::OR32_IMM   =>   reg[_dst] = (reg[_dst] as u32             | insn.imm  as u32) as u64,
-                ebpf::OR32_REG   =>   reg[_dst] = (reg[_dst] as u32             | reg[_src] as u32) as u64,
-                ebpf::AND32_IMM  =>   reg[_dst] = (reg[_dst] as u32             & insn.imm  as u32) as u64,
-                ebpf::AND32_REG  =>   reg[_dst] = (reg[_dst] as u32             & reg[_src] as u32) as u64,
-                ebpf::LSH32_IMM  =>   reg[_dst] = (reg[_dst] as u32).wrapping_shl(insn.imm  as u32) as u64,
-                ebpf::LSH32_REG  =>   reg[_dst] = (reg[_dst] as u32).wrapping_shl(reg[_src] as u32) as u64,
-                ebpf::RSH32_IMM  =>   reg[_dst] = (reg[_dst] as u32).wrapping_shr(insn.imm  as u32) as u64,
-                ebpf::RSH32_REG  =>   reg[_dst] = (reg[_dst] as u32).wrapping_shr(reg[_src] as u32) as u64,
-                ebpf::NEG32      => { reg[_dst] = (reg[_dst] as i32).wrapping_neg()                 as u64; reg[_dst] &= U32MAX; },
-                ebpf::MOD32_IMM  =>   reg[_dst] = (reg[_dst] as u32             % insn.imm  as u32) as u64,
-                ebpf::MOD32_REG  => {
+                }
+                ebpf::OR32_IMM => reg[_dst] = (reg[_dst] as u32 | insn.imm as u32) as u64,
+                ebpf::OR32_REG => reg[_dst] = (reg[_dst] as u32 | reg[_src] as u32) as u64,
+                ebpf::AND32_IMM => reg[_dst] = (reg[_dst] as u32 & insn.imm as u32) as u64,
+                ebpf::AND32_REG => reg[_dst] = (reg[_dst] as u32 & reg[_src] as u32) as u64,
+                ebpf::LSH32_IMM => {
+                    reg[_dst] = (reg[_dst] as u32).wrapping_shl(insn.imm as u32) as u64
+                }
+                ebpf::LSH32_REG => {
+                    reg[_dst] = (reg[_dst] as u32).wrapping_shl(reg[_src] as u32) as u64
+                }
+                ebpf::RSH32_IMM => {
+                    reg[_dst] = (reg[_dst] as u32).wrapping_shr(insn.imm as u32) as u64
+                }
+                ebpf::RSH32_REG => {
+                    reg[_dst] = (reg[_dst] as u32).wrapping_shr(reg[_src] as u32) as u64
+                }
+                ebpf::NEG32 => {
+                    reg[_dst] = (reg[_dst] as i32).wrapping_neg() as u64;
+                    reg[_dst] &= U32MAX;
+                }
+                ebpf::MOD32_IMM => reg[_dst] = (reg[_dst] as u32 % insn.imm as u32) as u64,
+                ebpf::MOD32_REG => {
                     if reg[_src] == 0 {
-                        Err(Error::new(ErrorKind::Other,"Error: division by 0"))?;
+                        Err(Error::new(ErrorKind::Other, "Error: division by 0"))?;
                     }
                     reg[_dst] = (reg[_dst] as u32 % reg[_src] as u32) as u64;
-                },
-                ebpf::XOR32_IMM  =>   reg[_dst] = (reg[_dst] as u32             ^ insn.imm  as u32) as u64,
-                ebpf::XOR32_REG  =>   reg[_dst] = (reg[_dst] as u32             ^ reg[_src] as u32) as u64,
-                ebpf::MOV32_IMM  =>   reg[_dst] = insn.imm   as u32                                 as u64,
-                ebpf::MOV32_REG  =>   reg[_dst] = (reg[_src] as u32)                                as u64,
-                ebpf::ARSH32_IMM => { reg[_dst] = (reg[_dst] as i32).wrapping_shr(insn.imm  as u32) as u64; reg[_dst] &= U32MAX; },
-                ebpf::ARSH32_REG => { reg[_dst] = (reg[_dst] as i32).wrapping_shr(reg[_src] as u32) as u64; reg[_dst] &= U32MAX; },
-                ebpf::LE         => {
+                }
+                ebpf::XOR32_IMM => reg[_dst] = (reg[_dst] as u32 ^ insn.imm as u32) as u64,
+                ebpf::XOR32_REG => reg[_dst] = (reg[_dst] as u32 ^ reg[_src] as u32) as u64,
+                ebpf::MOV32_IMM => reg[_dst] = insn.imm as u32 as u64,
+                ebpf::MOV32_REG => reg[_dst] = (reg[_src] as u32) as u64,
+                ebpf::ARSH32_IMM => {
+                    reg[_dst] = (reg[_dst] as i32).wrapping_shr(insn.imm as u32) as u64;
+                    reg[_dst] &= U32MAX;
+                }
+                ebpf::ARSH32_REG => {
+                    reg[_dst] = (reg[_dst] as i32).wrapping_shr(reg[_src] as u32) as u64;
+                    reg[_dst] &= U32MAX;
+                }
+                ebpf::LE => {
                     reg[_dst] = match insn.imm {
                         16 => (reg[_dst] as u16).to_le() as u64,
                         32 => (reg[_dst] as u32).to_le() as u64,
-                        64 =>  reg[_dst].to_le(),
-                        _  => unreachable!(),
+                        64 => reg[_dst].to_le(),
+                        _ => unreachable!(),
                     };
-                },
-                ebpf::BE         => {
+                }
+                ebpf::BE => {
                     reg[_dst] = match insn.imm {
                         16 => (reg[_dst] as u16).to_be() as u64,
                         32 => (reg[_dst] as u32).to_be() as u64,
-                        64 =>  reg[_dst].to_be(),
-                        _  => unreachable!(),
+                        64 => reg[_dst].to_be(),
+                        _ => unreachable!(),
                     };
-                },
+                }
 
                 // BPF_ALU64 class
-                ebpf::ADD64_IMM  => reg[_dst] = reg[_dst].wrapping_add(insn.imm as u64),
-                ebpf::ADD64_REG  => reg[_dst] = reg[_dst].wrapping_add(reg[_src]),
-                ebpf::SUB64_IMM  => reg[_dst] = reg[_dst].wrapping_sub(insn.imm as u64),
-                ebpf::SUB64_REG  => reg[_dst] = reg[_dst].wrapping_sub(reg[_src]),
-                ebpf::MUL64_IMM  => reg[_dst] = reg[_dst].wrapping_mul(insn.imm as u64),
-                ebpf::MUL64_REG  => reg[_dst] = reg[_dst].wrapping_mul(reg[_src]),
-                ebpf::DIV64_IMM  => reg[_dst]                       /= insn.imm as u64,
-                ebpf::DIV64_REG  => {
+                ebpf::ADD64_IMM => reg[_dst] = reg[_dst].wrapping_add(insn.imm as u64),
+                ebpf::ADD64_REG => reg[_dst] = reg[_dst].wrapping_add(reg[_src]),
+                ebpf::SUB64_IMM => reg[_dst] = reg[_dst].wrapping_sub(insn.imm as u64),
+                ebpf::SUB64_REG => reg[_dst] = reg[_dst].wrapping_sub(reg[_src]),
+                ebpf::MUL64_IMM => reg[_dst] = reg[_dst].wrapping_mul(insn.imm as u64),
+                ebpf::MUL64_REG => reg[_dst] = reg[_dst].wrapping_mul(reg[_src]),
+                ebpf::DIV64_IMM => reg[_dst] /= insn.imm as u64,
+                ebpf::DIV64_REG => {
                     if reg[_src] == 0 {
-                        Err(Error::new(ErrorKind::Other,"Error: division by 0"))?;
+                        Err(Error::new(ErrorKind::Other, "Error: division by 0"))?;
                     }
                     reg[_dst] /= reg[_src];
-                },
-                ebpf::OR64_IMM   => reg[_dst] |=  insn.imm as u64,
-                ebpf::OR64_REG   => reg[_dst] |=  reg[_src],
-                ebpf::AND64_IMM  => reg[_dst] &=  insn.imm as u64,
-                ebpf::AND64_REG  => reg[_dst] &=  reg[_src],
-                ebpf::LSH64_IMM  => reg[_dst] <<= insn.imm as u64,
-                ebpf::LSH64_REG  => reg[_dst] <<= reg[_src],
-                ebpf::RSH64_IMM  => reg[_dst] >>= insn.imm as u64,
-                ebpf::RSH64_REG  => reg[_dst] >>= reg[_src],
-                ebpf::NEG64      => reg[_dst] = -(reg[_dst] as i64) as u64,
-                ebpf::MOD64_IMM  => reg[_dst] %=  insn.imm as u64,
-                ebpf::MOD64_REG  => {
+                }
+                ebpf::OR64_IMM => reg[_dst] |= insn.imm as u64,
+                ebpf::OR64_REG => reg[_dst] |= reg[_src],
+                ebpf::AND64_IMM => reg[_dst] &= insn.imm as u64,
+                ebpf::AND64_REG => reg[_dst] &= reg[_src],
+                ebpf::LSH64_IMM => reg[_dst] <<= insn.imm as u64,
+                ebpf::LSH64_REG => reg[_dst] <<= reg[_src],
+                ebpf::RSH64_IMM => reg[_dst] >>= insn.imm as u64,
+                ebpf::RSH64_REG => reg[_dst] >>= reg[_src],
+                ebpf::NEG64 => reg[_dst] = -(reg[_dst] as i64) as u64,
+                ebpf::MOD64_IMM => reg[_dst] %= insn.imm as u64,
+                ebpf::MOD64_REG => {
                     if reg[_src] == 0 {
-                        Err(Error::new(ErrorKind::Other,"Error: division by 0"))?;
+                        Err(Error::new(ErrorKind::Other, "Error: division by 0"))?;
                     }
                     reg[_dst] %= reg[_src];
-                },
-                ebpf::XOR64_IMM  => reg[_dst] ^= insn.imm  as u64,
-                ebpf::XOR64_REG  => reg[_dst] ^= reg[_src],
-                ebpf::MOV64_IMM  => reg[_dst] =  insn.imm  as u64,
-                ebpf::MOV64_REG  => reg[_dst] =  reg[_src],
-                ebpf::ARSH64_IMM => reg[_dst] = (reg[_dst] as i64 >> insn.imm)  as u64,
+                }
+                ebpf::XOR64_IMM => reg[_dst] ^= insn.imm as u64,
+                ebpf::XOR64_REG => reg[_dst] ^= reg[_src],
+                ebpf::MOV64_IMM => reg[_dst] = insn.imm as u64,
+                ebpf::MOV64_REG => reg[_dst] = reg[_src],
+                ebpf::ARSH64_IMM => reg[_dst] = (reg[_dst] as i64 >> insn.imm) as u64,
                 ebpf::ARSH64_REG => reg[_dst] = (reg[_dst] as i64 >> reg[_src]) as u64,
 
                 // BPF_JMP class
                 // TODO: check this actually works as expected for signed / unsigned ops
-                ebpf::JA         =>                                             insn_ptr = (insn_ptr as i16 + insn.off) as usize,
-                ebpf::JEQ_IMM    => if  reg[_dst] == insn.imm as u64          { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JEQ_REG    => if  reg[_dst] == reg[_src]                { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JGT_IMM    => if  reg[_dst] >  insn.imm as u64          { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JGT_REG    => if  reg[_dst] >  reg[_src]                { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JGE_IMM    => if  reg[_dst] >= insn.imm as u64          { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JGE_REG    => if  reg[_dst] >= reg[_src]                { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JLT_IMM    => if  reg[_dst] <  insn.imm as u64          { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JLT_REG    => if  reg[_dst] <  reg[_src]                { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JLE_IMM    => if  reg[_dst] <= insn.imm as u64          { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JLE_REG    => if  reg[_dst] <= reg[_src]                { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSET_IMM   => if  reg[_dst] &  insn.imm as u64 != 0     { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSET_REG   => if  reg[_dst] &  reg[_src]       != 0     { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JNE_IMM    => if  reg[_dst] != insn.imm as u64          { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JNE_REG    => if  reg[_dst] != reg[_src]                { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSGT_IMM   => if  reg[_dst] as i64 >  insn.imm  as i64  { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSGT_REG   => if  reg[_dst] as i64 >  reg[_src] as i64  { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSGE_IMM   => if  reg[_dst] as i64 >= insn.imm  as i64  { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSGE_REG   => if  reg[_dst] as i64 >= reg[_src] as i64  { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSLT_IMM   => if (reg[_dst] as i64) <  insn.imm  as i64 { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSLT_REG   => if (reg[_dst] as i64) <  reg[_src] as i64 { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSLE_IMM   => if (reg[_dst] as i64) <= insn.imm  as i64 { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
-                ebpf::JSLE_REG   => if (reg[_dst] as i64) <= reg[_src] as i64 { insn_ptr = (insn_ptr as i16 + insn.off) as usize; },
+                ebpf::JA => insn_ptr = (insn_ptr as i16 + insn.off) as usize,
+                ebpf::JEQ_IMM => {
+                    if reg[_dst] == insn.imm as u64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JEQ_REG => {
+                    if reg[_dst] == reg[_src] {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JGT_IMM => {
+                    if reg[_dst] > insn.imm as u64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JGT_REG => {
+                    if reg[_dst] > reg[_src] {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JGE_IMM => {
+                    if reg[_dst] >= insn.imm as u64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JGE_REG => {
+                    if reg[_dst] >= reg[_src] {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JLT_IMM => {
+                    if reg[_dst] < insn.imm as u64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JLT_REG => {
+                    if reg[_dst] < reg[_src] {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JLE_IMM => {
+                    if reg[_dst] <= insn.imm as u64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JLE_REG => {
+                    if reg[_dst] <= reg[_src] {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSET_IMM => {
+                    if reg[_dst] & insn.imm as u64 != 0 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSET_REG => {
+                    if reg[_dst] & reg[_src] != 0 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JNE_IMM => {
+                    if reg[_dst] != insn.imm as u64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JNE_REG => {
+                    if reg[_dst] != reg[_src] {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSGT_IMM => {
+                    if reg[_dst] as i64 > insn.imm as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSGT_REG => {
+                    if reg[_dst] as i64 > reg[_src] as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSGE_IMM => {
+                    if reg[_dst] as i64 >= insn.imm as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSGE_REG => {
+                    if reg[_dst] as i64 >= reg[_src] as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSLT_IMM => {
+                    if (reg[_dst] as i64) < insn.imm as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSLT_REG => {
+                    if (reg[_dst] as i64) < reg[_src] as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSLE_IMM => {
+                    if (reg[_dst] as i64) <= insn.imm as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
+                ebpf::JSLE_REG => {
+                    if (reg[_dst] as i64) <= reg[_src] as i64 {
+                        insn_ptr = (insn_ptr as i16 + insn.off) as usize;
+                    }
+                }
                 // Do not delegate the check to the verifier, since registered functions can be
                 // changed after the program has been verified.
-                ebpf::CALL       => if let Some(function) = self.helpers.get(&(insn.imm as u32)) {
-                    reg[0] = function(reg[1], reg[2], reg[3], reg[4], reg[5]);
-                } else {
-                    Err(Error::new(ErrorKind::Other, format!("Error: unknown helper function (id: {:#x})", insn.imm as u32)))?;
-                },
-                ebpf::TAIL_CALL  => unimplemented!(),
-                ebpf::EXIT       => return Ok(reg[0]),
+                ebpf::CALL => {
+                    if let Some(function) = self.helpers.get(&(insn.imm as u32)) {
+                        reg[0] = function(reg[1], reg[2], reg[3], reg[4], reg[5]);
+                    } else {
+                        Err(Error::new(
+                            ErrorKind::Other,
+                            format!(
+                                "Error: unknown helper function (id: {:#x})",
+                                insn.imm as u32
+                            ),
+                        ))?;
+                    }
+                }
+                ebpf::TAIL_CALL => unimplemented!(),
+                ebpf::EXIT => return Ok(reg[0]),
 
-                _                => unreachable!()
+                _ => unreachable!(),
             }
         }
 
         unreachable!()
     }
 
-    fn check_mem(addr: u64, len: usize, access_type: &str, insn_ptr: usize,
-                 mbuff: &[u8], mem: &[u8], stack: &[u8]) -> Result<(), Error> {
-        if mbuff.as_ptr() as u64 <= addr && addr + len as u64 <= mbuff.as_ptr() as u64 + mbuff.len() as u64 {
-            return Ok(())
+    fn check_mem(
+        addr: u64,
+        len: usize,
+        access_type: &str,
+        insn_ptr: usize,
+        mbuff: &[u8],
+        mem: &[u8],
+        stack: &[u8],
+    ) -> Result<(), Error> {
+        if mbuff.as_ptr() as u64 <= addr
+            && addr + len as u64 <= mbuff.as_ptr() as u64 + mbuff.len() as u64
+        {
+            return Ok(());
         }
-        if mem.as_ptr() as u64 <= addr && addr + len as u64 <= mem.as_ptr() as u64 + mem.len() as u64 {
-            return Ok(())
+        if mem.as_ptr() as u64 <= addr
+            && addr + len as u64 <= mem.as_ptr() as u64 + mem.len() as u64
+        {
+            return Ok(());
         }
-        if stack.as_ptr() as u64 <= addr && addr + len as u64 <= stack.as_ptr() as u64 + stack.len() as u64 {
-            return Ok(())
+        if stack.as_ptr() as u64 <= addr
+            && addr + len as u64 <= stack.as_ptr() as u64 + stack.len() as u64
+        {
+            return Ok(());
         }
 
         Err(Error::new(ErrorKind::Other, format!(
@@ -620,9 +798,12 @@ impl<'a> EbpfVmMbuff<'a> {
     /// ```
     #[cfg(not(windows))]
     pub fn jit_compile(&mut self) -> Result<(), Error> {
-        let prog = match self.prog { 
+        let prog = match self.prog {
             Some(prog) => prog,
-            None => Err(Error::new(ErrorKind::Other, "Error: No program set, call prog_set() to load one"))?,
+            None => Err(Error::new(
+                ErrorKind::Other,
+                "Error: No program set, call prog_set() to load one",
+            ))?,
         };
         self.jit = Some(jit::compile(prog, &self.helpers, true, false)?);
         Ok(())
@@ -680,22 +861,35 @@ impl<'a> EbpfVmMbuff<'a> {
     ///     assert_eq!(res, 0x2211);
     /// }
     /// ```
-    pub unsafe fn execute_program_jit(&self, mem: &mut [u8], mbuff: &'a mut [u8]) -> Result<u64, Error> {
+    pub unsafe fn execute_program_jit(
+        &self,
+        mem: &mut [u8],
+        mbuff: &'a mut [u8],
+    ) -> Result<u64, Error> {
         // If packet data is empty, do not send the address of an empty slice; send a null pointer
         //  as first argument instead, as this is uBPF's behavior (empty packet should not happen
         //  in the kernel; anyway the verifier would prevent the use of uninitialized registers).
         //  See `mul_loop` test.
         let mem_ptr = match mem.len() {
             0 => std::ptr::null_mut(),
-            _ => mem.as_ptr() as *mut u8
+            _ => mem.as_ptr() as *mut u8,
         };
         // The last two arguments are not used in this function. They would be used if there was a
         // need to indicate to the JIT at which offset in the mbuff mem_ptr and mem_ptr + mem.len()
         // should be stored; this is what happens with struct EbpfVmFixedMbuff.
         match self.jit {
-            Some(jit) => Ok(jit(mbuff.as_ptr() as *mut u8, mbuff.len(), mem_ptr, mem.len(), 0, 0)),
-            None => Err(Error::new(ErrorKind::Other,
-                        "Error: program has not been JIT-compiled")),
+            Some(jit) => Ok(jit(
+                mbuff.as_ptr() as *mut u8,
+                mbuff.len(),
+                mem_ptr,
+                mem.len(),
+                0,
+                0,
+            )),
+            None => Err(Error::new(
+                ErrorKind::Other,
+                "Error: program has not been JIT-compiled",
+            )),
         }
     }
 }
@@ -769,11 +963,10 @@ impl<'a> EbpfVmMbuff<'a> {
 /// ```
 pub struct EbpfVmFixedMbuff<'a> {
     parent: EbpfVmMbuff<'a>,
-    mbuff:  MetaBuff,
+    mbuff: MetaBuff,
 }
 
 impl<'a> EbpfVmFixedMbuff<'a> {
-
     /// Create a new virtual machine instance, and load an eBPF program into that instance.
     /// When attempting to load the program, it passes through a simple verifier.
     ///
@@ -793,18 +986,22 @@ impl<'a> EbpfVmFixedMbuff<'a> {
     /// // Instantiate a VM. Note that we provide the start and end offsets for mem pointers.
     /// let mut vm = rbpf::EbpfVmFixedMbuff::new(Some(prog), 0x40, 0x50).unwrap();
     /// ```
-    pub fn new(prog: Option<&'a [u8]>, data_offset: usize, data_end_offset: usize) -> Result<EbpfVmFixedMbuff<'a>, Error> {
+    pub fn new(
+        prog: Option<&'a [u8]>,
+        data_offset: usize,
+        data_end_offset: usize,
+    ) -> Result<EbpfVmFixedMbuff<'a>, Error> {
         let parent = EbpfVmMbuff::new(prog)?;
-        let get_buff_len = | x: usize, y: usize | if x >= y { x + 8 } else { y + 8 };
+        let get_buff_len = |x: usize, y: usize| if x >= y { x + 8 } else { y + 8 };
         let buffer = vec![0u8; get_buff_len(data_offset, data_end_offset)];
         let mbuff = MetaBuff {
-            data_offset:     data_offset,
+            data_offset: data_offset,
             data_end_offset: data_end_offset,
-            buffer:          buffer,
+            buffer: buffer,
         };
         Ok(EbpfVmFixedMbuff {
             parent: parent,
-            mbuff:  mbuff,
+            mbuff: mbuff,
         })
     }
 
@@ -840,8 +1037,13 @@ impl<'a> EbpfVmFixedMbuff<'a> {
     /// let res = vm.execute_program(mem).unwrap();
     /// assert_eq!(res, 0x27);
     /// ```
-    pub fn set_program(&mut self, prog: &'a [u8], data_offset: usize, data_end_offset: usize) -> Result<(), Error> {
-        let get_buff_len = | x: usize, y: usize | if x >= y { x + 8 } else { y + 8 };
+    pub fn set_program(
+        &mut self,
+        prog: &'a [u8],
+        data_offset: usize,
+        data_end_offset: usize,
+    ) -> Result<(), Error> {
+        let get_buff_len = |x: usize, y: usize| if x >= y { x + 8 } else { y + 8 };
         let buffer = vec![0u8; get_buff_len(data_offset, data_end_offset)];
         self.mbuff.buffer = buffer;
         self.mbuff.data_offset = data_offset;
@@ -864,7 +1066,7 @@ impl<'a> EbpfVmFixedMbuff<'a> {
     /// fn verifier(prog: &[u8]) -> Result<(), Error> {
     ///     let last_insn = ebpf::get_insn(prog, (prog.len() / ebpf::INSN_SIZE) - 1);
     ///     if last_insn.opc != ebpf::EXIT {
-    ///         return Err(Error::new(ErrorKind::Other, 
+    ///         return Err(Error::new(ErrorKind::Other,
     ///                    "[Verifier] Error: program does not end with “EXIT” instruction"));
     ///     }
     ///     Ok(())
@@ -926,7 +1128,11 @@ impl<'a> EbpfVmFixedMbuff<'a> {
     /// let res = vm.execute_program(mem).unwrap();
     /// assert_eq!(res, 3);
     /// ```
-    pub fn register_helper(&mut self, key: u32, function: fn (u64, u64, u64, u64, u64) -> u64) -> Result<(), Error> {
+    pub fn register_helper(
+        &mut self,
+        key: u32,
+        function: fn(u64, u64, u64, u64, u64) -> u64,
+    ) -> Result<(), Error> {
         self.parent.register_helper(key, function)
     }
 
@@ -967,8 +1173,14 @@ impl<'a> EbpfVmFixedMbuff<'a> {
             Err(Error::new(ErrorKind::Other, format!("Error: buffer too small ({:?}), cannot use data_offset {:?} and data_end_offset {:?}",
             l, self.mbuff.data_offset, self.mbuff.data_end_offset)))?;
         }
-        LittleEndian::write_u64(&mut self.mbuff.buffer[(self.mbuff.data_offset) .. ], mem.as_ptr() as u64);
-        LittleEndian::write_u64(&mut self.mbuff.buffer[(self.mbuff.data_end_offset) .. ], mem.as_ptr() as u64 + mem.len() as u64);
+        LittleEndian::write_u64(
+            &mut self.mbuff.buffer[(self.mbuff.data_offset)..],
+            mem.as_ptr() as u64,
+        );
+        LittleEndian::write_u64(
+            &mut self.mbuff.buffer[(self.mbuff.data_end_offset)..],
+            mem.as_ptr() as u64 + mem.len() as u64,
+        );
         self.parent.execute_program(mem, &self.mbuff.buffer)
     }
 
@@ -997,9 +1209,12 @@ impl<'a> EbpfVmFixedMbuff<'a> {
     /// ```
     #[cfg(not(windows))]
     pub fn jit_compile(&mut self) -> Result<(), Error> {
-        let prog = match self.parent.prog { 
+        let prog = match self.parent.prog {
             Some(prog) => prog,
-            None => Err(Error::new(ErrorKind::Other, "Error: No program set, call prog_set() to load one"))?,
+            None => Err(Error::new(
+                ErrorKind::Other,
+                "Error: No program set, call prog_set() to load one",
+            ))?,
         };
         self.parent.jit = Some(jit::compile(prog, &self.parent.helpers, true, true)?);
         Ok(())
@@ -1060,18 +1275,22 @@ impl<'a> EbpfVmFixedMbuff<'a> {
         //  See `mul_loop` test.
         let mem_ptr = match mem.len() {
             0 => std::ptr::null_mut(),
-            _ => mem.as_ptr() as *mut u8
+            _ => mem.as_ptr() as *mut u8,
         };
-        
+
         match self.parent.jit {
-            Some(jit) => Ok(jit(self.mbuff.buffer.as_ptr() as *mut u8,
-                                self.mbuff.buffer.len(),
-                                mem_ptr,
-                                mem.len(), 
-                                self.mbuff.data_offset,
-                                self.mbuff.data_end_offset)),
-            None => Err(Error::new(ErrorKind::Other,
-                                   "Error: program has not been JIT-compiled"))
+            Some(jit) => Ok(jit(
+                self.mbuff.buffer.as_ptr() as *mut u8,
+                self.mbuff.buffer.len(),
+                mem_ptr,
+                mem.len(),
+                self.mbuff.data_offset,
+                self.mbuff.data_end_offset,
+            )),
+            None => Err(Error::new(
+                ErrorKind::Other,
+                "Error: program has not been JIT-compiled",
+            )),
         }
     }
 }
@@ -1104,7 +1323,6 @@ pub struct EbpfVmRaw<'a> {
 }
 
 impl<'a> EbpfVmRaw<'a> {
-
     /// Create a new virtual machine instance, and load an eBPF program into that instance.
     /// When attempting to load the program, it passes through a simple verifier.
     ///
@@ -1123,9 +1341,7 @@ impl<'a> EbpfVmRaw<'a> {
     /// ```
     pub fn new(prog: Option<&'a [u8]>) -> Result<EbpfVmRaw<'a>, Error> {
         let parent = EbpfVmMbuff::new(prog)?;
-         Ok(EbpfVmRaw {
-            parent: parent,
-        })
+        Ok(EbpfVmRaw { parent: parent })
     }
 
     /// Load a new eBPF program into the virtual machine instance.
@@ -1228,7 +1444,11 @@ impl<'a> EbpfVmRaw<'a> {
     /// let res = vm.execute_program(mem).unwrap();
     /// assert_eq!(res, 0x10000000);
     /// ```
-    pub fn register_helper(&mut self, key: u32, function: fn (u64, u64, u64, u64, u64) -> u64) -> Result<(), Error> {
+    pub fn register_helper(
+        &mut self,
+        key: u32,
+        function: fn(u64, u64, u64, u64, u64) -> u64,
+    ) -> Result<(), Error> {
         self.parent.register_helper(key, function)
     }
 
@@ -1278,10 +1498,12 @@ impl<'a> EbpfVmRaw<'a> {
     /// ```
     #[cfg(not(windows))]
     pub fn jit_compile(&mut self) -> Result<(), Error> {
-        let prog = match self.parent.prog { 
+        let prog = match self.parent.prog {
             Some(prog) => prog,
-            None => Err(Error::new(ErrorKind::Other,
-                        "Error: No program set, call prog_set() to load one"))?,
+            None => Err(Error::new(
+                ErrorKind::Other,
+                "Error: No program set, call prog_set() to load one",
+            ))?,
         };
         self.parent.jit = Some(jit::compile(prog, &self.parent.helpers, false, false)?);
         Ok(())
@@ -1374,7 +1596,6 @@ pub struct EbpfVmNoData<'a> {
 }
 
 impl<'a> EbpfVmNoData<'a> {
-
     /// Create a new virtual machine instance, and load an eBPF program into that instance.
     /// When attempting to load the program, it passes through a simple verifier.
     ///
@@ -1392,9 +1613,7 @@ impl<'a> EbpfVmNoData<'a> {
     /// ```
     pub fn new(prog: Option<&'a [u8]>) -> Result<EbpfVmNoData<'a>, Error> {
         let parent = EbpfVmRaw::new(prog)?;
-        Ok(EbpfVmNoData {
-            parent: parent,
-        })
+        Ok(EbpfVmNoData { parent: parent })
     }
 
     /// Load a new eBPF program into the virtual machine instance.
@@ -1491,7 +1710,11 @@ impl<'a> EbpfVmNoData<'a> {
     /// let res = vm.execute_program().unwrap();
     /// assert_eq!(res, 0x1000);
     /// ```
-    pub fn register_helper(&mut self, key: u32, function: fn (u64, u64, u64, u64, u64) -> u64) -> Result<(), Error> {
+    pub fn register_helper(
+        &mut self,
+        key: u32,
+        function: fn(u64, u64, u64, u64, u64) -> u64,
+    ) -> Result<(), Error> {
         self.parent.register_helper(key, function)
     }
 
